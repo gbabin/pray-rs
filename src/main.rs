@@ -1,3 +1,5 @@
+extern crate png;
+
 use std::io::prelude::*;
 use std::io::BufReader;
 use std::io::BufWriter;
@@ -5,6 +7,8 @@ use std::net::TcpListener;
 use std::net::TcpStream;
 use std::str;
 use std::{thread, time};
+use std::path::Path;
+use std::fs::File;
 
 fn main() {
     let listener = TcpListener::bind("127.0.0.1:1234").unwrap();
@@ -31,10 +35,10 @@ fn receive_command(reader: &mut BufReader<TcpStream>) {
     println!("data = <{:?}>", data); 
 }
 
-static WINDOW_WIDTH : u32 = 800;
-static WINDOW_HEIGHT : u32 = 600;
+const WINDOW_WIDTH : u32 = 800;
+const WINDOW_HEIGHT : u32 = 600;
 
-static XML_FILE : &str = "../scenes/bille.xml";
+const XML_FILE : &str = "../scenes/bille.xml";
 
 fn send_command(writer: &mut BufWriter<TcpStream>, command: &str) {
     let command_bytes = command.as_bytes();
@@ -49,6 +53,15 @@ fn handle_connection(stream: TcpStream) {
     let mut writer = BufWriter::new(stream);
 
     let second = time::Duration::from_secs(1);
+
+    let path = Path::new("image.png");
+    let file = File::create(path).unwrap();
+    let ref mut w = BufWriter::new(file);
+    let mut encoder = png::Encoder::new(w, WINDOW_WIDTH, WINDOW_HEIGHT);
+    encoder.set_color(png::ColorType::Rgb);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer_png = encoder.write_header().unwrap();
+    let image_data = [0u8; (WINDOW_WIDTH*WINDOW_HEIGHT*3) as usize];
 
     println!(">>> Waiting LOGIN ...");
     receive_command(&mut reader);
@@ -68,13 +81,14 @@ fn handle_connection(stream: TcpStream) {
     thread::sleep(second);
 
     println!(">>> Sending CALCULATE ...");
-    let command_info = format!("CALCULATE {} {} {} {}", 1, 0, 1, 1);
+    let command_info = format!("CALCULATE {} {} {} {}", 1, 0, 1, 64);
     send_command(&mut writer, &command_info);
-
 
     println!(">>> Waiting CALCULATING ...");
     receive_command(&mut reader);
 
     println!(">>> Waiting RESULT ...");
     receive_command(&mut reader);
+
+    writer_png.write_image_data(&image_data).unwrap();
 }

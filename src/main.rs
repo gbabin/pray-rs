@@ -1,3 +1,4 @@
+extern crate crossbeam_utils;
 extern crate png;
 
 use std::fs::File;
@@ -8,8 +9,6 @@ use std::net::TcpListener;
 use std::net::TcpStream;
 use std::path::Path;
 use std::str;
-use std::sync::Arc;
-use std::sync::Mutex;
 use std::thread;
 use std::time;
 
@@ -22,7 +21,6 @@ const WINDOW_HEIGHT : u32 = (WINDOW_WIDTH * 9) / 16;
 const XML_FILE : &str = "../scenes/testScene1.xml";
 
 const IMAGE_DATA_SIZE : usize = (WINDOW_WIDTH*WINDOW_HEIGHT*3) as usize;
-type ImageData = Vec<u8>;
 
 const CLIENTS_COUNT : u32 = 6;
 
@@ -36,39 +34,30 @@ fn main() {
     encoder.set_color(png::ColorType::Rgb);
     encoder.set_depth(png::BitDepth::Eight);
     let mut writer_png = encoder.write_header().unwrap();
-    let image_data = vec![127u8; IMAGE_DATA_SIZE];
-    let shared_image = Arc::new(Mutex::new(image_data));
-
-    let mut handles = vec![];
+    let mut image_data = vec![127u8; IMAGE_DATA_SIZE];
 
     println!("Listening...");
 
-    for id in 1..CLIENTS_COUNT+1 {
-        let (stream, _addr) = listener.accept().unwrap();
+    let chunk_line_count = WINDOW_HEIGHT/CLIENTS_COUNT + u32::from(WINDOW_HEIGHT % CLIENTS_COUNT != 0);
+    let chunk_size : usize = (chunk_line_count * WINDOW_WIDTH * 3) as usize;
 
-        println!(">>> [{}] Connection established", id);
+    crossbeam_utils::thread::scope(|sc| {
+        for (i, image_chunk) in image_data.chunks_mut(chunk_size).enumerate() {
+            let id : u32 = (i+1) as u32;
+            let (stream, _addr) = listener.accept().unwrap();
 
-        let shared_image = Arc::clone(&shared_image);
-        let handle = thread::spawn(move || {
-            handle_connection(stream, id, Arc::clone(&shared_image),
-                              (id-1)*WINDOW_HEIGHT/CLIENTS_COUNT,
-                              id*WINDOW_HEIGHT/CLIENTS_COUNT-1);
-        });
-        handles.push(handle);
-    }
+            println!(">>> [{}] Connection established", id);
 
-    for handle in handles {
-        handle.join().unwrap();
-    }
+            sc.spawn(move |_| {
+                handle_connection(stream, id, image_chunk,
+                                  (id-1)*chunk_line_count,
+                                  u32::min(id*chunk_line_count-1, WINDOW_HEIGHT-1));
+            });
+        }
+    }).unwrap();
 
     println!(">>> Saving image ...");
-    writer_png.write_image_data(&**shared_image.lock().unwrap()).unwrap();
-}
-
-fn set_pixel(image: &mut [u8], x: u32, y: u32, r: u8, g: u8, b: u8) {
-    image[(3*(x + WINDOW_WIDTH*(WINDOW_HEIGHT-1-y))    ) as usize] = r;
-    image[(3*(x + WINDOW_WIDTH*(WINDOW_HEIGHT-1-y)) + 1) as usize] = g;
-    image[(3*(x + WINDOW_WIDTH*(WINDOW_HEIGHT-1-y)) + 2) as usize] = b;
+    writer_png.write_image_data(&image_data).unwrap();
 }
 
 fn receive_command(reader: &mut BufReader<TcpStream>) {
@@ -84,7 +73,7 @@ fn receive_command(reader: &mut BufReader<TcpStream>) {
     //println!("data = <{:?}>", data);
 }
 
-fn receive_command_result(reader: &mut BufReader<TcpStream>, shared_image: Arc<Mutex<ImageData>>, y: u32) {
+fn receive_command_result(reader: &mut BufReader<TcpStream>, image: &mut [u8], relative_y: u32) {
     let mut size_bytes : Vec<u8> = vec![];
     reader.read_until(' ' as u8, &mut size_bytes).unwrap();
     size_bytes.truncate(size_bytes.len() - 1);
@@ -96,14 +85,14 @@ fn receive_command_result(reader: &mut BufReader<TcpStream>, shared_image: Arc<M
     //println!("data = <{}>", String::from_utf8_lossy(&data));
     //println!("data = <{:?}>", data);
 
-    let mut image = shared_image.lock().unwrap();
+    let (_header, pixels) = data.split_at(9);
+    let (pixels, _zero) = pixels.split_at(pixels.len()-1);
 
-    for x in 0 .. WINDOW_WIDTH {
-        set_pixel(&mut **image, x, y,
-                  data[(9+3*x  ) as usize],
-                  data[(9+3*x+1) as usize],
-                  data[(9+3*x+2) as usize]);
-    }
+    assert_eq!(pixels.len(), (WINDOW_WIDTH * 3) as usize); // we received a line
+
+    image[(relative_y * WINDOW_WIDTH * 3) as usize
+          ..
+          ((relative_y + 1) * WINDOW_WIDTH * 3) as usize].copy_from_slice(&pixels);
 }
 
 fn send_command(writer: &mut BufWriter<TcpStream>, command: &str) {
@@ -114,7 +103,7 @@ fn send_command(writer: &mut BufWriter<TcpStream>, command: &str) {
     writer.flush().unwrap();
 }
 
-fn handle_connection(stream: TcpStream, id: u32, shared_image: Arc<Mutex<ImageData>>, y_min: u32, y_max: u32) {
+fn handle_connection(stream: TcpStream, id: u32, image: &mut [u8], y_min: u32, y_max: u32) {
     let mut reader = BufReader::new(stream.try_clone().unwrap());
     let mut writer = BufWriter::new(stream);
 
@@ -138,14 +127,13 @@ fn handle_connection(stream: TcpStream, id: u32, shared_image: Arc<Mutex<ImageDa
     for y in y_min .. y_max+1 {
 
         println!(">>> [{}] Sending CALCULATE ({}/{}) ...", id, y-y_min+1, y_max-y_min+1);
-        let command_info = format!("CALCULATE {} {} {} {}", 1, WINDOW_HEIGHT-1-y, WINDOW_WIDTH, 1);
+        let command_info = format!("CALCULATE {} {} {} {}", 1, y, WINDOW_WIDTH, 1);
         send_command(&mut writer, &command_info);
 
         println!(">>> [{}] Waiting CALCULATING ...", id);
         receive_command(&mut reader);
 
         println!(">>> [{}] Waiting RESULT ...", id);
-        let shared_image = Arc::clone(&shared_image);
-        receive_command_result(&mut reader, shared_image, y);
+        receive_command_result(&mut reader, image, y-y_min);
     }
 }

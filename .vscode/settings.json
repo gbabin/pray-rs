@@ -1,5 +1,0 @@
-{
-    "rust-client.channel": "stable",
-    "rust-client.rlsPath": "/usr/bin/rust-analyzer",
-    "rust-client.disableRustup": true,
-}

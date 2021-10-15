@@ -1,0 +1,15 @@
+#!/bin/bash
+
+cargo build --release
+
+CLIENTS_COUNT=$(grep -Po '(?<=(CLIENTS_COUNT : u32 = ))[0-9]+' src/main.rs)
+echo "CLIENTS_COUNT=${CLIENTS_COUNT}"
+
+for (( c=1; c<=CLIENTS_COUNT; c++ ))
+do
+    (
+        cd ../dev-pray.git/client/; ./pray_client --server=127.0.0.1 --port=1234 > client_$c.log 2>&1 &
+    )
+done
+
+cargo run --release

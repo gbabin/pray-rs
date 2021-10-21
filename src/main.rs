@@ -48,7 +48,7 @@ fn main() {
 
     let path = Path::new("image.png");
     let file = File::create(path).unwrap();
-    let ref mut image_writer = BufWriter::new(file);
+    let image_writer = &mut BufWriter::new(file);
     let mut encoder = png::Encoder::new(image_writer, opts.image_width as u32, opts.image_height as u32);
     encoder.set_color(png::ColorType::Rgb);
     encoder.set_depth(png::BitDepth::Eight);
@@ -74,14 +74,14 @@ fn main() {
             }
 
             let scene_file = opts.scene_file.clone();
-            let image_width = opts.image_width.clone();
-            let image_height = opts.image_height.clone();
-            let verbosity_level = opts.verbosity_level.clone();
+            let image_width = opts.image_width;
+            let image_height = opts.image_height;
+            let verbosity_level = opts.verbosity_level;
 
             sc.builder()
                 .name(format!("client_{}", id))
                 .spawn(move |_| {
-                    handle_connection(stream, scene_file, image_width, image_height, id, image_chunk,
+                    handle_connection(stream, id, scene_file, image_width, image_height, image_chunk,
                                       i * chunk_line_count,
                                       usize::min((i + 1) * chunk_line_count - 1, image_height - 1),
                                       verbosity_level);
@@ -100,7 +100,7 @@ fn main() {
 
 fn receive_command(reader: &mut BufReader<TcpStream>, verbosity_level: u8) {
     let mut size_bytes : Vec<u8> = vec![];
-    reader.read_until(' ' as u8, &mut size_bytes).unwrap();
+    reader.read_until(b' ', &mut size_bytes).unwrap();
     size_bytes.truncate(size_bytes.len() - 1);
     let size : usize = str::from_utf8(&size_bytes).unwrap().parse::<usize>().unwrap();
     if verbosity_level >= 3 {
@@ -116,7 +116,7 @@ fn receive_command(reader: &mut BufReader<TcpStream>, verbosity_level: u8) {
 
 fn receive_command_result(reader: &mut BufReader<TcpStream>, image: &mut [u8], image_width: usize, relative_y: usize, verbosity_level: u8) {
     let mut size_bytes : Vec<u8> = vec![];
-    reader.read_until(' ' as u8, &mut size_bytes).unwrap();
+    reader.read_until(b' ', &mut size_bytes).unwrap();
     size_bytes.truncate(size_bytes.len() - 1);
     let size : usize = str::from_utf8(&size_bytes).unwrap().parse::<usize>().unwrap();
     if verbosity_level >= 3 {
@@ -137,18 +137,18 @@ fn receive_command_result(reader: &mut BufReader<TcpStream>, image: &mut [u8], i
 
     image[relative_y * image_width * 3
           ..
-          (relative_y + 1) * image_width * 3].copy_from_slice(&pixels);
+          (relative_y + 1) * image_width * 3].copy_from_slice(pixels);
 }
 
 fn send_command(writer: &mut BufWriter<TcpStream>, command: &str) {
     let command_bytes = command.as_bytes();
     write!(writer, "{} ", command_bytes.len()).unwrap();
     writer.write_all(command_bytes).unwrap();
-    writer.write(&vec![0]).unwrap();
+    writer.write_all(&[0]).unwrap();
     writer.flush().unwrap();
 }
 
-fn handle_connection(stream: TcpStream, scene_file: String, image_width: usize, image_height: usize, id: u32, image: &mut [u8], y_min: usize, y_max: usize, verbosity_level: u8) {
+fn handle_connection(stream: TcpStream, id: u32, scene_file: String, image_width: usize, image_height: usize, image: &mut [u8], y_min: usize, y_max: usize, verbosity_level: u8) {
     let mut reader = BufReader::new(stream.try_clone().unwrap());
     let mut writer = BufWriter::new(stream);
 

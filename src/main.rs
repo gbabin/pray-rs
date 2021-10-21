@@ -1,3 +1,5 @@
+#[macro_use]
+extern crate clap;
 extern crate crossbeam_utils;
 extern crate png;
 
@@ -11,94 +13,131 @@ use std::path::Path;
 use std::str;
 use std::time::Duration;
 
-const GROUP_SIZE : usize = 64;
-const GROUPS_COUNT : usize = 60; // 3840 × 2160 px
+use clap::Parser;
 
-const WINDOW_WIDTH : usize = GROUP_SIZE * GROUPS_COUNT;
-const WINDOW_HEIGHT : usize = (WINDOW_WIDTH * 9) / 16;
-
-const XML_FILE : &str = "../scenes/testScene1.xml";
-
-const IMAGE_DATA_SIZE : usize = WINDOW_WIDTH * WINDOW_HEIGHT * 3;
-
-const CLIENTS_COUNT : usize = 6;
-
-const CLIENT_COMPUTATION_TIMEOUT : u64 = 10;
+#[derive(Parser)]
+#[clap(version = crate_version!())]
+struct Opts {
+    /// Path to XML scene file
+    #[clap(short = 's')]
+    scene_file: String,
+    /// Image width (must be divisible by 64)
+    #[clap(short = 'w', name = "WIDTH")]
+    image_width : usize,
+    /// Image height
+    #[clap(short = 'y', name = "HEIGHT")]
+    image_height : usize,
+    /// Expected number of clients
+    #[clap(short = 'c')]
+    clients_count: usize,
+    /// Client computation timeout (in seconds)
+    #[clap(short = 't', name = "TIMEOUT", default_value = "10")]
+    client_computation_timeout : u64,
+    /// Add a level of verbosity (can be used multiple times)
+    #[clap(short = 'v', parse(from_occurrences))]
+    verbosity_level: u8,
+}
 
 fn main() {
+    let opts: Opts = Opts::parse();
+    assert!(opts.image_width % 64 == 0);
+
+    let image_data_size : usize = opts.image_width * opts.image_height * 3;
+
     let listener = TcpListener::bind("127.0.0.1:1234").unwrap();
 
     let path = Path::new("image.png");
     let file = File::create(path).unwrap();
-    let ref mut w = BufWriter::new(file);
-    let mut encoder = png::Encoder::new(w, WINDOW_WIDTH as u32, WINDOW_HEIGHT as u32);
+    let ref mut image_writer = BufWriter::new(file);
+    let mut encoder = png::Encoder::new(image_writer, opts.image_width as u32, opts.image_height as u32);
     encoder.set_color(png::ColorType::Rgb);
     encoder.set_depth(png::BitDepth::Eight);
     let mut writer_png = encoder.write_header().unwrap();
-    let mut image_data = vec![127u8; IMAGE_DATA_SIZE];
+    let mut image_data = vec![127u8; image_data_size];
 
-    println!("Listening...");
+    if opts.verbosity_level >= 1 {
+        println!("Listening...");
+    }
 
-    let chunk_line_count = WINDOW_HEIGHT/CLIENTS_COUNT + usize::from(WINDOW_HEIGHT % CLIENTS_COUNT != 0);
-    let chunk_size = chunk_line_count * WINDOW_WIDTH * 3;
+    let chunk_line_count = opts.image_height/opts.clients_count + usize::from(opts.image_height % opts.clients_count != 0);
+    let chunk_size = chunk_line_count * opts.image_width * 3;
 
     crossbeam_utils::thread::scope(|sc| {
 
         for (i, image_chunk) in image_data.chunks_mut(chunk_size).enumerate() {
             let id : u32 = (i+1) as u32;
-            let (stream, _addr) = listener.accept().unwrap();
-            stream.set_read_timeout(Some(Duration::from_secs(CLIENT_COMPUTATION_TIMEOUT))).unwrap();
 
-            println!(">>> [{}] Connection established", id);
+            let (stream, _addr) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(opts.client_computation_timeout))).unwrap();
+            if opts.verbosity_level >= 1 {
+                println!(">>> [{}] Connection established", id);
+            }
+
+            let scene_file = opts.scene_file.clone();
+            let image_width = opts.image_width.clone();
+            let image_height = opts.image_height.clone();
+            let verbosity_level = opts.verbosity_level.clone();
 
             sc.builder()
                 .name(format!("client_{}", id))
                 .spawn(move |_| {
-                    handle_connection(stream, id, image_chunk,
+                    handle_connection(stream, scene_file, image_width, image_height, id, image_chunk,
                                       i * chunk_line_count,
-                                      usize::min((i + 1) * chunk_line_count - 1, WINDOW_HEIGHT-1));
-                    println!(">>> [{}] Finished", id);
+                                      usize::min((i + 1) * chunk_line_count - 1, image_height - 1),
+                                      verbosity_level);
+                    if verbosity_level >= 1 {
+                        println!(">>> [{}] Finished", id);
+                    }
             }).unwrap();
         }
     }).expect("Failed to close client threads scope");
 
-    println!(">>> Saving image ...");
+    if opts.verbosity_level >= 1 {
+        println!(">>> Saving image ...");
+    }
     writer_png.write_image_data(&image_data).unwrap();
 }
 
-fn receive_command(reader: &mut BufReader<TcpStream>) {
+fn receive_command(reader: &mut BufReader<TcpStream>, verbosity_level: u8) {
     let mut size_bytes : Vec<u8> = vec![];
     reader.read_until(' ' as u8, &mut size_bytes).unwrap();
     size_bytes.truncate(size_bytes.len() - 1);
     let size : usize = str::from_utf8(&size_bytes).unwrap().parse::<usize>().unwrap();
-    // println!("size = {}", size);
+    if verbosity_level >= 3 {
+        println!("size = {}", size);
+    }
 
     let mut data : Vec<u8> = vec![0; size+1];
     reader.read_exact(&mut data).unwrap();
-    // println!("data = <{}>", String::from_utf8_lossy(&data));
-    // println!("data = <{:?}>", data);
+    if verbosity_level >= 3 {
+        println!("data = <{}>", String::from_utf8_lossy(&data));
+    }
 }
 
-fn receive_command_result(reader: &mut BufReader<TcpStream>, image: &mut [u8], relative_y: usize) {
+fn receive_command_result(reader: &mut BufReader<TcpStream>, image: &mut [u8], image_width: usize, relative_y: usize, verbosity_level: u8) {
     let mut size_bytes : Vec<u8> = vec![];
     reader.read_until(' ' as u8, &mut size_bytes).unwrap();
     size_bytes.truncate(size_bytes.len() - 1);
     let size : usize = str::from_utf8(&size_bytes).unwrap().parse::<usize>().unwrap();
-    // println!("size = {}", size);
+    if verbosity_level >= 3 {
+        println!("size = {}", size);
+    }
 
     let mut data : Vec<u8> = vec![0; size+1];
     reader.read_exact(&mut data).unwrap();
-    // println!("data = <{}>", String::from_utf8_lossy(&data));
-    // println!("data = <{:?}>", data);
+    if verbosity_level >= 4 {
+        println!("data = <{}>", String::from_utf8_lossy(&data));
+        println!("data = <{:?}>", data);
+    }
 
     let (_header, pixels) = data.split_at(9);
     let (pixels, _zero) = pixels.split_at(pixels.len()-1);
 
-    assert_eq!(pixels.len(), WINDOW_WIDTH * 3); // we received a line
+    assert_eq!(pixels.len(), image_width * 3); // we received a complete line
 
-    image[relative_y * WINDOW_WIDTH * 3
+    image[relative_y * image_width * 3
           ..
-          (relative_y + 1) * WINDOW_WIDTH * 3].copy_from_slice(&pixels);
+          (relative_y + 1) * image_width * 3].copy_from_slice(&pixels);
 }
 
 fn send_command(writer: &mut BufWriter<TcpStream>, command: &str) {
@@ -109,32 +148,42 @@ fn send_command(writer: &mut BufWriter<TcpStream>, command: &str) {
     writer.flush().unwrap();
 }
 
-fn handle_connection(stream: TcpStream, _id: u32, image: &mut [u8], y_min: usize, y_max: usize) {
+fn handle_connection(stream: TcpStream, scene_file: String, image_width: usize, image_height: usize, id: u32, image: &mut [u8], y_min: usize, y_max: usize, verbosity_level: u8) {
     let mut reader = BufReader::new(stream.try_clone().unwrap());
     let mut writer = BufWriter::new(stream);
 
-    // println!(">>> [{}] Waiting LOGIN ...", id);
-    receive_command(&mut reader); // LOGIN
+    if verbosity_level >= 2 {
+        println!(">>> [{}] Waiting LOGIN ...", id);
+    }
+    receive_command(&mut reader, verbosity_level); // LOGIN
 
-    // println!(">>> [{}] Sending INFO ...", id);
-    let command_info = format!("INFO {} {}", WINDOW_WIDTH, WINDOW_HEIGHT);
+    if verbosity_level >= 2 {
+        println!(">>> [{}] Sending INFO ...", id);
+    }
+    let command_info = format!("INFO {} {}", image_width, image_height);
     send_command(&mut writer, &command_info);
 
-    receive_command(&mut reader); // INFODONE
+    receive_command(&mut reader, verbosity_level); // INFODONE
 
-    // println!(">>> [{}] Sending SETSCENE ...", id);
-    let command_info = format!("SETSCENE {}", XML_FILE);
+    if verbosity_level >= 2 {
+        println!(">>> [{}] Sending SETSCENE ...", id);
+    }
+    let command_info = format!("SETSCENE {}", scene_file);
     send_command(&mut writer, &command_info);
 
-    receive_command(&mut reader); // SETSCENEDONE
+    receive_command(&mut reader, verbosity_level); // SETSCENEDONE
 
     for y in y_min ..= y_max {
 
-        // println!(">>> [{}] Sending CALCULATE ({}/{}) ...", id, y-y_min+1, y_max-y_min+1);
-        let command_info = format!("CALCULATE {} {} {} {}", 1, y, WINDOW_WIDTH, 1);
+        if verbosity_level >= 2 {
+            println!(">>> [{}] Sending CALCULATE ({}/{}) ...", id, y-y_min+1, y_max-y_min+1);
+        }
+        let command_info = format!("CALCULATE {} {} {} {}", 1, y, image_width, 1);
         send_command(&mut writer, &command_info);
 
-        // println!(">>> [{}] Waiting RESULT ...", id);
-        receive_command_result(&mut reader, image, y-y_min);
+        if verbosity_level >= 2 {
+            println!(">>> [{}] Waiting RESULT ...", id);
+        }
+        receive_command_result(&mut reader, image, image_width, y-y_min, verbosity_level);
     }
 }

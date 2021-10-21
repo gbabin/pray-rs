@@ -11,17 +11,17 @@ use std::path::Path;
 use std::str;
 use std::time::Duration;
 
-const GROUP_SIZE : u32 = 64;
-const GROUPS_COUNT : u32 = 60; // 3840 × 2160 px
+const GROUP_SIZE : usize = 64;
+const GROUPS_COUNT : usize = 60; // 3840 × 2160 px
 
-const WINDOW_WIDTH : u32 = GROUP_SIZE * GROUPS_COUNT;
-const WINDOW_HEIGHT : u32 = (WINDOW_WIDTH * 9) / 16;
+const WINDOW_WIDTH : usize = GROUP_SIZE * GROUPS_COUNT;
+const WINDOW_HEIGHT : usize = (WINDOW_WIDTH * 9) / 16;
 
 const XML_FILE : &str = "../scenes/testScene1.xml";
 
-const IMAGE_DATA_SIZE : usize = (WINDOW_WIDTH*WINDOW_HEIGHT*3) as usize;
+const IMAGE_DATA_SIZE : usize = WINDOW_WIDTH * WINDOW_HEIGHT * 3;
 
-const CLIENTS_COUNT : u32 = 6;
+const CLIENTS_COUNT : usize = 6;
 
 const CLIENT_COMPUTATION_TIMEOUT : u64 = 10;
 
@@ -31,7 +31,7 @@ fn main() {
     let path = Path::new("image.png");
     let file = File::create(path).unwrap();
     let ref mut w = BufWriter::new(file);
-    let mut encoder = png::Encoder::new(w, WINDOW_WIDTH, WINDOW_HEIGHT);
+    let mut encoder = png::Encoder::new(w, WINDOW_WIDTH as u32, WINDOW_HEIGHT as u32);
     encoder.set_color(png::ColorType::Rgb);
     encoder.set_depth(png::BitDepth::Eight);
     let mut writer_png = encoder.write_header().unwrap();
@@ -39,8 +39,8 @@ fn main() {
 
     println!("Listening...");
 
-    let chunk_line_count = WINDOW_HEIGHT/CLIENTS_COUNT + u32::from(WINDOW_HEIGHT % CLIENTS_COUNT != 0);
-    let chunk_size : usize = (chunk_line_count * WINDOW_WIDTH * 3) as usize;
+    let chunk_line_count = WINDOW_HEIGHT/CLIENTS_COUNT + usize::from(WINDOW_HEIGHT % CLIENTS_COUNT != 0);
+    let chunk_size = chunk_line_count * WINDOW_WIDTH * 3;
 
     crossbeam_utils::thread::scope(|sc| {
 
@@ -55,8 +55,8 @@ fn main() {
                 .name(format!("client_{}", id))
                 .spawn(move |_| {
                     handle_connection(stream, id, image_chunk,
-                                      (id-1)*chunk_line_count,
-                                      u32::min(id*chunk_line_count-1, WINDOW_HEIGHT-1));
+                                      i * chunk_line_count,
+                                      usize::min((i + 1) * chunk_line_count - 1, WINDOW_HEIGHT-1));
                     println!(">>> [{}] Finished", id);
             }).unwrap();
         }
@@ -79,7 +79,7 @@ fn receive_command(reader: &mut BufReader<TcpStream>) {
     // println!("data = <{:?}>", data);
 }
 
-fn receive_command_result(reader: &mut BufReader<TcpStream>, image: &mut [u8], relative_y: u32) {
+fn receive_command_result(reader: &mut BufReader<TcpStream>, image: &mut [u8], relative_y: usize) {
     let mut size_bytes : Vec<u8> = vec![];
     reader.read_until(' ' as u8, &mut size_bytes).unwrap();
     size_bytes.truncate(size_bytes.len() - 1);
@@ -94,11 +94,11 @@ fn receive_command_result(reader: &mut BufReader<TcpStream>, image: &mut [u8], r
     let (_header, pixels) = data.split_at(9);
     let (pixels, _zero) = pixels.split_at(pixels.len()-1);
 
-    assert_eq!(pixels.len(), (WINDOW_WIDTH * 3) as usize); // we received a line
+    assert_eq!(pixels.len(), WINDOW_WIDTH * 3); // we received a line
 
-    image[(relative_y * WINDOW_WIDTH * 3) as usize
+    image[relative_y * WINDOW_WIDTH * 3
           ..
-          ((relative_y + 1) * WINDOW_WIDTH * 3) as usize].copy_from_slice(&pixels);
+          (relative_y + 1) * WINDOW_WIDTH * 3].copy_from_slice(&pixels);
 }
 
 fn send_command(writer: &mut BufWriter<TcpStream>, command: &str) {
@@ -109,7 +109,7 @@ fn send_command(writer: &mut BufWriter<TcpStream>, command: &str) {
     writer.flush().unwrap();
 }
 
-fn handle_connection(stream: TcpStream, _id: u32, image: &mut [u8], y_min: u32, y_max: u32) {
+fn handle_connection(stream: TcpStream, _id: u32, image: &mut [u8], y_min: usize, y_max: usize) {
     let mut reader = BufReader::new(stream.try_clone().unwrap());
     let mut writer = BufWriter::new(stream);
 

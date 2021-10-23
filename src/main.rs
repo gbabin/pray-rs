@@ -43,6 +43,7 @@ struct Opts {
 struct Client {
     id: NonZeroU32,
     address: SocketAddr,
+    name: String,
     reader: BufReader<TcpStream>,
     writer: BufWriter<TcpStream>,
 }
@@ -126,7 +127,11 @@ fn main() {
     }
 }
 
-fn receive_command(reader: &mut BufReader<TcpStream>, verbosity_level: u8) {
+fn receive_command(
+    reader: &mut BufReader<TcpStream>,
+    expected_command: &str,
+    verbosity_level: u8,
+) -> Option<String> {
     let mut size_bytes: Vec<u8> = vec![];
     reader.read_until(b' ', &mut size_bytes).unwrap();
     size_bytes.truncate(size_bytes.len() - 1);
@@ -140,9 +145,25 @@ fn receive_command(reader: &mut BufReader<TcpStream>, verbosity_level: u8) {
 
     let mut data: Vec<u8> = vec![0; size + 1];
     reader.read_exact(&mut data).unwrap();
+    let (message, _zero) = data.split_at(data.len() - 1);
+    let message = str::from_utf8(message).unwrap();
+    let (command, arguments) = if message.contains(' ') {
+        let (left, right) = message.split_once(' ').unwrap();
+        (left, Some(right))
+    } else {
+        (message, None)
+    };
+
     if verbosity_level >= 3 {
-        println!("data = <{}>", String::from_utf8_lossy(&data));
+        println!("command = <{}>", command);
+        if let Some(args) = arguments {
+            println!("arguments = <{}>", args)
+        }
     }
+
+    assert_eq!(command, expected_command);
+
+    arguments.map(String::from)
 }
 
 fn receive_command_result(
@@ -212,18 +233,19 @@ fn get_clients(
         if verbosity_level >= 2 {
             println!(">>> [{}] Waiting LOGIN ...", id);
         }
-        receive_command(&mut reader, verbosity_level); // LOGIN
+        let name = receive_command(&mut reader, "LOGIN", verbosity_level).unwrap();
 
         let client = Client {
             id,
             address,
+            name,
             reader,
             writer,
         };
         if verbosity_level >= 1 {
             println!(
-                ">>> [{}] Connection established from {}",
-                client.id, client.address
+                ">>> [{}] Connection established from {} ({})",
+                client.id, client.address, client.name
             );
         }
         clients.push(client)
@@ -247,7 +269,7 @@ fn initialize(
     let command_info = format!("INFO {} {}", image_width, image_height);
     send_command(&mut client.writer, &command_info);
 
-    receive_command(&mut client.reader, verbosity_level); // INFODONE
+    receive_command(&mut client.reader, "INFODONE", verbosity_level);
 
     if verbosity_level >= 2 {
         println!(">>> [{}] Sending SETSCENE ...", client.id);
@@ -255,7 +277,7 @@ fn initialize(
     let command_info = format!("SETSCENE {}", scene_file);
     send_command(&mut client.writer, &command_info);
 
-    receive_command(&mut client.reader, verbosity_level); // SETSCENEDONE
+    receive_command(&mut client.reader, "SETSCENEDONE", verbosity_level);
 }
 
 fn initialize_all(
@@ -412,7 +434,7 @@ fn move_camera_all(clients: &mut Vec<Client>, movement: CameraMovement, verbosit
 
         send_command(&mut client.writer, &command_info);
 
-        receive_command(&mut client.reader, verbosity_level); // CAMDONE
+        receive_command(&mut client.reader, "CAMDONE", verbosity_level);
     }
 
     if verbosity_level >= 1 {

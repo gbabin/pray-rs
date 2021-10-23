@@ -47,6 +47,21 @@ struct Client {
     writer: BufWriter<TcpStream>,
 }
 
+enum CameraMovement {
+    TranslateForward,
+    // TranslateBackwards,
+    // TranslateRight,
+    // TranslateLeft,
+    // TranslateUp,
+    // TranslateDown,
+    // RollLeft,
+    // RollRight,
+    // PitchUp,
+    // PitchDown,
+    // YawLeft,
+    // YawRight,
+}
+
 // while waiting for int_roundings
 // https://github.com/rust-lang/rfcs/issues/2844
 // https://github.com/rust-lang/rust/issues/88581
@@ -84,21 +99,31 @@ fn main() {
         opts.verbosity_level,
     );
 
-    render_all(
-        &mut clients,
-        &mut image_data,
-        opts.image_width,
-        opts.image_height,
-        opts.verbosity_level,
-    );
+    for i in 1..=5 {
+        render_all(
+            &mut clients,
+            &mut image_data,
+            opts.image_width,
+            opts.image_height,
+            opts.verbosity_level,
+        );
 
-    save_image(
-        "image.png",
-        &image_data,
-        opts.image_width,
-        opts.image_height,
-        opts.verbosity_level,
-    );
+        let path = format!("image{}.png", i);
+
+        save_image(
+            &path,
+            &image_data,
+            opts.image_width,
+            opts.image_height,
+            opts.verbosity_level,
+        );
+
+        move_camera_all(
+            &mut clients,
+            CameraMovement::TranslateForward,
+            opts.verbosity_level,
+        );
+    }
 }
 
 fn receive_command(reader: &mut BufReader<TcpStream>, verbosity_level: u8) {
@@ -358,5 +383,39 @@ fn save_image(
 
     if verbosity_level >= 1 {
         println!(">>> Image {} saved ...", path.display());
+    }
+}
+
+fn move_camera_all(clients: &mut Vec<Client>, movement: CameraMovement, verbosity_level: u8) {
+    let command_info = format!(
+        "CAM {}",
+        match movement {
+            CameraMovement::TranslateForward => "tF",
+            // CameraMovement::TranslateBackwards => "tB",
+            // CameraMovement::TranslateRight => "tR",
+            // CameraMovement::TranslateLeft => "tL",
+            // CameraMovement::TranslateUp => "tU",
+            // CameraMovement::TranslateDown => "tD",
+            // CameraMovement::RollLeft => "rL",
+            // CameraMovement::RollRight => "rR",
+            // CameraMovement::PitchUp => "pU",
+            // CameraMovement::PitchDown => "pD",
+            // CameraMovement::YawLeft => "yL",
+            // CameraMovement::YawRight => "yR",
+        }
+    );
+
+    for client in clients.iter_mut() {
+        if verbosity_level >= 2 {
+            println!(">>> [{}] Sending CAM ...", client.id);
+        }
+
+        send_command(&mut client.writer, &command_info);
+
+        receive_command(&mut client.reader, verbosity_level); // CAMDONE
+    }
+
+    if verbosity_level >= 1 {
+        println!(">>> All clients moved the camera");
     }
 }

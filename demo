@@ -2,15 +2,17 @@
 
 cargo build --release
 
+ADDRESS=127.0.0.1
+PORT=1234
 CLIENTS_COUNT=6
 
 for (( c=1; c<=CLIENTS_COUNT; c++ ))
 do
     (
-        cd ../dev-pray.git/client/; ./pray_client --server=127.0.0.1 --port=1234 > client_$c.log 2>&1 &
+        cd ../dev-pray.git/client/; ./pray_client --server=$ADDRESS --port=$PORT > client_$c.log 2>&1 &
     )
 done
 
 rm -f image*.png
 
-cargo run --release -- -s '../scenes/testScene1.xml' -w 3840 -y 2160 -c ${CLIENTS_COUNT} -v
+cargo run --release -- -s '../scenes/testScene1.xml' -w 1920 -y 1080 -a $ADDRESS -p $PORT -c ${CLIENTS_COUNT} -v

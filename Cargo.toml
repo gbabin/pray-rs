@@ -7,3 +7,4 @@ edition = "2021"
 clap = { version = "3.0.0-beta.5", default-features = false, features = ["cargo", "derive", "env", "std"] }
 crossbeam-utils = "0.8.5"
 png = "0.17.2"
+show-image = "0.9.4"

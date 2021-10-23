@@ -16,6 +16,7 @@ use std::str;
 use std::time::Duration;
 
 use clap::Parser;
+use show_image::{create_window, event, Color, ImageInfo, ImageView, WindowOptions, WindowProxy};
 
 #[derive(Parser)]
 #[clap(version = crate_version!())]
@@ -29,6 +30,12 @@ struct Opts {
     /// Image height
     #[clap(short = 'y', name = "HEIGHT")]
     image_height: usize,
+    /// Address
+    #[clap(short = 'a')]
+    address: String,
+    /// Port
+    #[clap(short = 'p')]
+    port: u16,
     /// Expected number of clients
     #[clap(short = 'c')]
     clients_count: usize,
@@ -50,17 +57,18 @@ struct Client {
 
 enum CameraMovement {
     TranslateForward,
-    // TranslateBackwards,
-    // TranslateRight,
-    // TranslateLeft,
-    // TranslateUp,
-    // TranslateDown,
-    // RollLeft,
-    // RollRight,
-    // PitchUp,
-    // PitchDown,
-    // YawLeft,
-    // YawRight,
+    TranslateBackwards,
+    TranslateRight,
+    TranslateLeft,
+    TranslateUp,
+    TranslateDown,
+    RollLeft,
+    RollRight,
+    PitchUp,
+    PitchDown,
+    YawLeft,
+    YawRight,
+    ModeSwitch, // switch between scene and camera mode
 }
 
 // while waiting for int_roundings
@@ -76,6 +84,7 @@ fn div_ceil(lhs: usize, rhs: usize) -> usize {
     }
 }
 
+#[show_image::main]
 fn main() {
     let opts: Opts = Opts::parse();
     assert!(opts.image_width % 64 == 0);
@@ -86,6 +95,8 @@ fn main() {
     let mut clients = Vec::with_capacity(opts.clients_count);
 
     get_clients(
+        &opts.address,
+        opts.port,
         &mut clients,
         opts.clients_count,
         opts.client_computation_timeout,
@@ -100,31 +111,98 @@ fn main() {
         opts.verbosity_level,
     );
 
-    for i in 1..=5 {
-        render_all(
-            &mut clients,
-            &mut image_data,
-            opts.image_width,
-            opts.image_height,
-            opts.verbosity_level,
-        );
+    let window_options = WindowOptions {
+        preserve_aspect_ratio: true,
+        background_color: Color::black(),
+        start_hidden: false,
+        size: Some([opts.image_width as u32, opts.image_height as u32]),
+        resizable: false,
+        borderless: true,
+        overlays_visible: false,
+        default_controls: false,
+    };
 
-        let path = format!("image{}.png", i);
+    let window = create_window("image", window_options).unwrap();
 
-        save_image(
-            &path,
-            &image_data,
-            opts.image_width,
-            opts.image_height,
-            opts.verbosity_level,
-        );
+    update_image_gui(&window, opts.image_width, opts.image_height, &image_data);
 
-        move_camera_all(
-            &mut clients,
-            CameraMovement::TranslateForward,
-            opts.verbosity_level,
-        );
+    render_all(
+        &mut clients,
+        &mut image_data,
+        opts.image_width,
+        opts.image_height,
+        opts.verbosity_level,
+    );
+
+    update_image_gui(&window, opts.image_width, opts.image_height, &image_data);
+
+    for event in window.event_channel().unwrap() {
+        if let event::WindowEvent::KeyboardInput(event) = event {
+            if event.input.state.is_pressed() {
+                if let Some(event::VirtualKeyCode::Escape) = event.input.key_code {
+                    break;
+                }
+
+                if let Some(movement) = match event.input.key_code {
+                    // AZERTY bindings
+                    Some(event::VirtualKeyCode::Z) => Some(CameraMovement::TranslateForward),
+                    Some(event::VirtualKeyCode::S) => Some(CameraMovement::TranslateBackwards),
+                    Some(event::VirtualKeyCode::D) => Some(CameraMovement::TranslateRight),
+                    Some(event::VirtualKeyCode::Q) => Some(CameraMovement::TranslateLeft),
+                    Some(event::VirtualKeyCode::R) => Some(CameraMovement::TranslateUp),
+                    Some(event::VirtualKeyCode::F) => Some(CameraMovement::TranslateDown),
+                    Some(event::VirtualKeyCode::A) => Some(CameraMovement::RollLeft),
+                    Some(event::VirtualKeyCode::E) => Some(CameraMovement::RollRight),
+                    Some(event::VirtualKeyCode::Up) => Some(CameraMovement::PitchUp),
+                    Some(event::VirtualKeyCode::Down) => Some(CameraMovement::PitchDown),
+                    Some(event::VirtualKeyCode::Left) => Some(CameraMovement::YawLeft),
+                    Some(event::VirtualKeyCode::Right) => Some(CameraMovement::YawRight),
+                    _ => None,
+                } {
+                    move_camera_all(&mut clients, movement, opts.verbosity_level);
+
+                    render_all(
+                        &mut clients,
+                        &mut image_data,
+                        opts.image_width,
+                        opts.image_height,
+                        opts.verbosity_level,
+                    );
+
+                    update_image_gui(&window, opts.image_width, opts.image_height, &image_data);
+                }
+
+                if let Some(event::VirtualKeyCode::M) = event.input.key_code {
+                    move_camera_all(
+                        &mut clients,
+                        CameraMovement::ModeSwitch,
+                        opts.verbosity_level,
+                    );
+                }
+            }
+        }
     }
+
+    save_image(
+        "image.png",
+        &image_data,
+        opts.image_width,
+        opts.image_height,
+        opts.verbosity_level,
+    );
+}
+
+fn update_image_gui(
+    window: &WindowProxy,
+    image_width: usize,
+    image_height: usize,
+    image_data: &[u8],
+) {
+    let image = ImageView::new(
+        ImageInfo::rgb8(image_width as u32, image_height as u32),
+        image_data,
+    );
+    window.set_image("image", image).unwrap();
 }
 
 fn receive_command(
@@ -191,7 +269,8 @@ fn receive_command_result(
         println!("data = <{:?}>", data);
     }
 
-    let (_header, pixels) = data.split_at(9);
+    let (header, pixels) = data.split_at(9);
+    assert_eq!(str::from_utf8(header).unwrap(), "RESULT 1 ");
     let (pixels, _zero) = pixels.split_at(pixels.len() - 1);
 
     assert_eq!(pixels.len(), image_width * 3); // we received a complete line
@@ -208,12 +287,14 @@ fn send_command(writer: &mut BufWriter<TcpStream>, command: &str) {
 }
 
 fn get_clients(
+    address: &str,
+    port: u16,
     clients: &mut Vec<Client>,
     clients_count: usize,
     client_computation_timeout: u64,
     verbosity_level: u8,
 ) {
-    let listener = TcpListener::bind("127.0.0.1:1234").unwrap();
+    let listener = TcpListener::bind((address, port)).unwrap();
 
     if verbosity_level >= 1 {
         println!(">>> Listening...");
@@ -413,17 +494,18 @@ fn move_camera_all(clients: &mut Vec<Client>, movement: CameraMovement, verbosit
         "CAM {}",
         match movement {
             CameraMovement::TranslateForward => "tF",
-            // CameraMovement::TranslateBackwards => "tB",
-            // CameraMovement::TranslateRight => "tR",
-            // CameraMovement::TranslateLeft => "tL",
-            // CameraMovement::TranslateUp => "tU",
-            // CameraMovement::TranslateDown => "tD",
-            // CameraMovement::RollLeft => "rL",
-            // CameraMovement::RollRight => "rR",
-            // CameraMovement::PitchUp => "pU",
-            // CameraMovement::PitchDown => "pD",
-            // CameraMovement::YawLeft => "yL",
-            // CameraMovement::YawRight => "yR",
+            CameraMovement::TranslateBackwards => "tB",
+            CameraMovement::TranslateRight => "tR",
+            CameraMovement::TranslateLeft => "tL",
+            CameraMovement::TranslateUp => "tU",
+            CameraMovement::TranslateDown => "tD",
+            CameraMovement::RollLeft => "rL",
+            CameraMovement::RollRight => "rR",
+            CameraMovement::PitchUp => "pU",
+            CameraMovement::PitchDown => "pD",
+            CameraMovement::YawLeft => "yL",
+            CameraMovement::YawRight => "yR",
+            CameraMovement::ModeSwitch => "sM",
         }
     );
 

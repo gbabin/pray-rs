@@ -38,6 +38,19 @@ struct Opts {
     verbosity_level: u8,
 }
 
+// while waiting for int_roundings
+// https://github.com/rust-lang/rfcs/issues/2844
+// https://github.com/rust-lang/rust/issues/88581
+fn div_ceil(lhs: usize, rhs: usize) -> usize {
+    let d = lhs / rhs;
+    let r = lhs % rhs;
+    if r > 0 {
+        d + 1
+    } else {
+        d
+    }
+}
+
 fn main() {
     let opts: Opts = Opts::parse();
     assert!(opts.image_width % 64 == 0);
@@ -63,8 +76,7 @@ fn main() {
         println!("Listening...");
     }
 
-    let chunk_line_count = opts.image_height / opts.clients_count
-        + usize::from(opts.image_height % opts.clients_count != 0);
+    let chunk_line_count = div_ceil(opts.image_height, opts.clients_count);
     let chunk_size = chunk_line_count * opts.image_width * 3;
 
     crossbeam_utils::thread::scope(|sc| {

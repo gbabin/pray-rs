@@ -11,4 +11,6 @@ do
     )
 done
 
+rm -f image*.png
+
 cargo run --release -- -s '../scenes/testScene1.xml' -w 3840 -y 2160 -c ${CLIENTS_COUNT} -v

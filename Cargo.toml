@@ -1,10 +1,10 @@
 [package]
 name = "pray-server"
-version = "1.0.1"
+version = "1.0.2"
 edition = "2021"
 
 [dependencies]
-clap = { version = "3.0.0", default-features = false, features = ["cargo", "derive", "env", "std"] }
-crossbeam-utils = "0.8.5"
-png = "0.17.2"
+clap = { version = "3.1.0", default-features = false, features = ["cargo", "derive", "env", "std"] }
+crossbeam-utils = "0.8.7"
+png = "0.17.3"
 show-image = "0.10.1"

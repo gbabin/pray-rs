@@ -363,7 +363,7 @@ fn initialize(
 }
 
 fn initialize_all(
-    clients: &mut Vec<Client>,
+    clients: &mut [Client],
     scene_file: &str,
     image_width: usize,
     image_height: usize,
@@ -429,8 +429,8 @@ fn render(
 }
 
 fn render_all(
-    clients: &mut Vec<Client>,
-    image_data: &mut Vec<u8>,
+    clients: &mut [Client],
+    image_data: &mut [u8],
     image_width: usize,
     image_height: usize,
     verbosity_level: u8,
@@ -490,7 +490,7 @@ fn save_image(
     }
 }
 
-fn move_camera_all(clients: &mut Vec<Client>, movement: CameraMovement, verbosity_level: u8) {
+fn move_camera_all(clients: &mut [Client], movement: CameraMovement, verbosity_level: u8) {
     let command_info = format!(
         "CAM {}",
         match movement {

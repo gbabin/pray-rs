@@ -43,7 +43,7 @@ struct Opts {
     #[clap(short = 't', name = "TIMEOUT", default_value = "10")]
     client_computation_timeout: u64,
     /// Add a level of verbosity (can be used multiple times)
-    #[clap(short = 'v', parse(from_occurrences))]
+    #[clap(short = 'v', action = clap::ArgAction::Count)]
     verbosity_level: u8,
 }
 
@@ -120,6 +120,7 @@ fn main() {
         borderless: true,
         overlays_visible: false,
         default_controls: false,
+        fullscreen: false,
     };
 
     let window = create_window("image", window_options).unwrap();
